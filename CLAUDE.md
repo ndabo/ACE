@@ -67,12 +67,22 @@ consolidated market data flows through `rega_*` columns. Includes hourly
 
 **Decision: Option A, adapted.** Historical-first dashboard built on (1) the
 pre-redesign RegA/RegD zip archive for depth, (2) the two posted post-redesign
-sample days as the current-regime exemplars, (3) a self-maintained rolling ACE
-archive (the 30-day retention makes archiving mandatory, not optional), and
-(4) reg_market_results for market context. Live element = ACE ticker only.
+sample days as the current-regime exemplars, and (3) reg_market_results for
+market context. Live element = ACE ticker only.
 Option B (PI-compensator approximation of the live signal from ACE) stays
 deferred; it is now the *only* possible route to post-redesign signal coverage
-beyond the sample days, which raises its future value — revisit after v1.
+beyond the sample days — revisit after v1.
+
+**Decision (2026-07-12, user): no ACE archive.** ACE is viewed on demand
+straight from DataMiner2, within PJM's rolling 30-day window (dedicated
+"ACE last 30 days" tab; the Historical view fetches ACE only when the selected
+window overlaps those 30 days). `scripts/archive_ace.py` still exists but is
+optional — NOTE: if Option B is ever attempted, archiving must restart first,
+since Option B filters historical ACE and PJM deletes it after 30 days.
+
+**Timezone rule:** all PJM API windows must be computed in EPT via
+`pjm_api.now_ept()`, never the machine clock (machine may be hours off EPT;
+querying "now" local can ask PJM for the future and silently return nothing).
 
 ### Step 1 — Data layer ✅ (2026-07-12)
 - [x] Pull scripts: ACE feed (`freqreg/pjm_api.py`), regulation signal files (`freqreg/ingest.py`), reg_market_results

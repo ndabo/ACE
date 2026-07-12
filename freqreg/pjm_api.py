@@ -17,6 +17,20 @@ import requests
 
 _BASE = "https://api.pjm.com/api/v1"
 
+# DataMiner2 keeps ACE for this many days, then it is gone forever.
+ACE_RETENTION_DAYS = 30
+
+
+def now_ept() -> pd.Timestamp:
+    """
+    Current time in PJM's Eastern Prevailing Time, tz-naive.
+
+    Never use the machine-local clock for API windows: if the machine is in
+    another timezone, asking PJM for "now" local can be a request for the
+    future (empty result) or miss the retention cutoff.
+    """
+    return pd.Timestamp.now(tz="America/New_York").tz_localize(None)
+
 
 def _api_key() -> str:
     key = os.environ.get("PJM_API_KEY", "").strip()

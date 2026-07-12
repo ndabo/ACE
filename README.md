@@ -14,21 +14,15 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python scripts/backfill_signal.py sample data/raw/new-signal-sample.xlsx
 .venv/bin/python scripts/backfill_signal.py zip data/raw/rto-regulation-signal-data.zip "02 2025"
 
-# ACE: DataMiner2 only retains 30 days — run daily (cron/launchd) to build history
-.venv/bin/python scripts/archive_ace.py
-
 # launch (optionally set FREQREG_PASSCODE for the access gate)
 FREQREG_PASSCODE=yourcode .venv/bin/streamlit run app.py
 ```
 
 Requires `PJM_API_KEY` in `.env` (same account as PJM-5CP).
 
-Suggested crontab line for the ACE archive (self-heals missed days within the
-30-day retention window):
-
-```cron
-15 6 * * * cd "/Users/ndabo/Desktop/GBD POWER/freq regulation PJM" && .venv/bin/python scripts/archive_ace.py >> data/ace_archive.log 2>&1
-```
+ACE is fetched on demand from DataMiner2 (PJM's rolling 30-day window) — no
+local archive by design. `scripts/archive_ace.py` remains available if that
+decision is ever reversed (required before attempting Option B).
 
 ## Layout
 

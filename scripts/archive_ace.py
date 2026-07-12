@@ -21,7 +21,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from freqreg import store  # noqa: E402
-from freqreg.pjm_api import fetch_ace  # noqa: E402
+from freqreg.pjm_api import fetch_ace, now_ept  # noqa: E402
 
 
 def archive_day(day: pd.Timestamp) -> int:
@@ -39,7 +39,7 @@ def main() -> None:
         archive_day(pd.Timestamp(sys.argv[1]))
         return
 
-    today = pd.Timestamp.now().normalize()
+    today = now_ept().normalize()
     have = set(store.available_ace_days())
     total = 0
     failed: list[str] = []

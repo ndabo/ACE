@@ -63,9 +63,18 @@ def load_signal_raw(start: str, end: str) -> pd.DataFrame:
     return store.load_signal(start, end, raw=True)
 
 
-@st.cache_data(show_spinner=False)
-def load_ace_window(start: str, end: str) -> pd.DataFrame:
-    return store.load_ace(start, end)
+@st.cache_data(show_spinner="Fetching ACE from PJM…", ttl=120)
+def fetch_ace_window(start: str, end: str) -> pd.DataFrame:
+    """ACE straight from DataMiner2 (kept 30 days by PJM — no local archive)."""
+    from freqreg.aggregate import aggregate
+    from freqreg.pjm_api import fetch_ace
+
+    df = fetch_ace(start, end)
+    if df.empty:
+        return df
+    df = df.set_index("ts")
+    rule = pick_resolution(pd.Timestamp(start), pd.Timestamp(end))
+    return aggregate(df, rule, cols=["ace_mw"]) if rule else df
 
 
 @st.cache_data(show_spinner="Simulating battery…")
@@ -98,16 +107,39 @@ if not days:
 st.sidebar.title("PJM Freq Regulation")
 st.sidebar.caption(f"{len(days)} day(s) of signal data available")
 
+default_start = days[max(0, len(days) - 7)]
 d_start, d_end = st.sidebar.select_slider(
-    "Date range", options=days, value=(days[0], days[-1]))
+    "Date range", options=days, value=(default_start, days[-1]))
 
 st.sidebar.subheader("Battery")
-cap = st.sidebar.number_input("Capacity (MW)", 1.0, 500.0, 10.0, step=1.0)
-mwh = st.sidebar.number_input("Energy (MWh)", 1.0, 2000.0, 20.0, step=1.0)
-soc_lo, soc_hi = st.sidebar.slider("SOC window", 0.0, 1.0, (0.10, 0.90), step=0.05)
-ramp = st.sidebar.number_input("Ramp (MW/min)", 1.0, 10000.0, 100.0, step=10.0)
-rte = st.sidebar.slider("Round-trip efficiency", 0.5, 1.0, 0.86, step=0.01)
-soc0 = st.sidebar.slider("Initial SOC", 0.0, 1.0, 0.5, step=0.05)
+cap = st.sidebar.number_input(
+    "Capacity (MW)", 1.0, 500.0, 10.0, step=1.0,
+    help="Cleared regulation capability. Target MW = signal × this. A ±1 "
+         "signal swings the battery between full charge and full discharge.")
+mwh = st.sidebar.number_input(
+    "Energy (MWh)", 1.0, 2000.0, 20.0, step=1.0,
+    help="Storage size. MWh ÷ MW = duration: 20 MWh / 10 MW = 2 h at full "
+         "power. Smaller = hits SOC bounds sooner when the signal is one-sided.")
+soc_lo, soc_hi = st.sidebar.slider(
+    "SOC window", 0.0, 1.0, (0.10, 0.90), step=0.05,
+    help="Usable state-of-charge band. Outside it the battery can't keep "
+         "discharging (floor) or charging (ceiling). Tighter window = less "
+         "usable energy = more deviations.")
+ramp = st.sidebar.number_input(
+    "Ramp (MW/min)", 1.0, 10000.0, 100.0, step=10.0,
+    help="Max change in output per minute. Batteries are fast (default is "
+         "effectively unlimited for 10 MW); lower it to see how slower assets "
+         "lag the signal's sharp reversals.")
+rte = st.sidebar.slider(
+    "Round-trip efficiency", 0.5, 1.0, 0.86, step=0.01,
+    help="Fraction of charged energy you get back out (losses split evenly "
+         "between charge and discharge). Below 1.0 the SOC drifts down over a "
+         "balanced signal — energy leaks every cycle.")
+soc0 = st.sidebar.slider(
+    "Initial SOC", 0.0, 1.0, 0.5, step=0.05,
+    help="Starting state of charge. 0.5 gives equal headroom both ways; "
+         "start high and a charge-heavy signal hits the ceiling almost "
+         "immediately.")
 
 params = BatteryParams(capacity_mw=cap, energy_mwh=mwh, soc_min=soc_lo,
                        soc_max=soc_hi, soc_init=soc0, ramp_mw_per_min=ramp,
@@ -133,7 +165,7 @@ if sim.empty:
     st.error("No signal data in the selected window.")
     st.stop()
 
-tab_hist, tab_dev, tab_live = st.tabs(["📈 Historical", "🚧 Deviations", "⚡ Live ACE"])
+tab_hist, tab_dev, tab_live = st.tabs(["📈 Historical", "🚧 Deviations", "⚡ ACE (last 30 days)"])
 
 
 # --- Historical view -----------------------------------------------------------
@@ -159,14 +191,20 @@ with tab_hist:
                                         "Signal → battery: instructed vs delivered MW",
                                         "State of charge"))
 
-    ace = load_ace_window(str(start), str(end))
+    from freqreg.pjm_api import ACE_RETENTION_DAYS, now_ept
+    ace_cutoff = now_ept() - pd.Timedelta(days=ACE_RETENTION_DAYS)
+    if end >= ace_cutoff:
+        ace = fetch_ace_window(str(max(start, ace_cutoff)), str(min(end, now_ept())))
+    else:
+        ace = pd.DataFrame()
     if not ace.empty:
         ace_col = "ace_mw_mean" if "ace_mw_mean" in ace.columns else "ace_mw"
         fig.add_scatter(x=ace.index, y=ace[ace_col], name="ACE", row=1, col=1,
                         line=dict(color="#888", width=1))
     else:
-        fig.add_annotation(text="No archived ACE for this window (DataMiner2 keeps "
-                                "30 days; scripts/archive_ace.py builds history)",
+        fig.add_annotation(text=f"ACE unavailable: PJM only keeps the last "
+                                f"{ACE_RETENTION_DAYS} days, and this window is older. "
+                                "See the ACE tab for the current period.",
                            xref="x domain", yref="y domain", x=0.5, y=0.5,
                            showarrow=False, row=1, col=1)
 
@@ -234,30 +272,47 @@ with tab_dev:
 # --- Live ACE ticker -------------------------------------------------------------
 
 with tab_live:
-    st.subheader("Live Area Control Error (DataMiner2, ~15 s cadence)")
-    st.caption("Option A: the regulation signal itself is a dispatch instruction "
-               "and is not publicly broadcast live — only ACE is. "
-               "Negative ACE = system short (discharge territory); positive = long.")
-    minutes = st.slider("Window (minutes)", 15, 180, 60, step=15)
-    if st.button("🔄 Refresh") or "live_ace" not in st.session_state:
-        from freqreg.pjm_api import fetch_ace
-        now = pd.Timestamp.now()
-        try:
-            st.session_state["live_ace"] = fetch_ace(
-                (now - pd.Timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M"),
-                now.strftime("%Y-%m-%d %H:%M"))
-        except Exception as exc:  # pragma: no cover - network path
-            st.session_state["live_ace"] = pd.DataFrame()
-            st.error(f"ACE fetch failed: {exc}")
-    live = st.session_state.get("live_ace", pd.DataFrame())
-    if not live.empty:
-        latest = live.iloc[-1]
+    from freqreg.pjm_api import now_ept
+
+    st.subheader("System imbalance — ACE (DataMiner2, ~15 s cadence)")
+    st.caption("The regulation signal is a dispatch instruction and is not "
+               "publicly broadcast live — ACE is the imbalance you CAN watch. "
+               "Negative = system short (discharge territory); positive = long. "
+               "PJM keeps 30 days; older ACE is gone. All times are Eastern (EPT).")
+    window = st.select_slider(
+        "Window", options=["1 h", "3 h", "6 h", "24 h", "3 d", "7 d", "14 d", "30 d"],
+        value="1 h")
+    n, unit = window.split()
+    delta = pd.Timedelta(hours=int(n)) if unit == "h" else pd.Timedelta(days=int(n))
+
+    if st.button("🔄 Refresh"):
+        fetch_ace_window.clear()
+    now = now_ept()
+    try:
+        live = fetch_ace_window((now - delta).strftime("%Y-%m-%d %H:%M"),
+                                now.strftime("%Y-%m-%d %H:%M"))
+    except Exception as exc:  # pragma: no cover - network path
+        live = pd.DataFrame()
+        st.error(f"ACE fetch failed: {exc}")
+
+    if live.empty:
+        st.warning("No ACE rows returned for this window.")
+    else:
+        ace_col = "ace_mw_mean" if "ace_mw_mean" in live.columns else "ace_mw"
+        latest_ts, latest_val = live.index[-1], live[ace_col].iloc[-1]
         c1, c2 = st.columns([1, 3])
-        c1.metric("Latest ACE", f"{latest['ace_mw']:.0f} MW",
-                  help=f"as of {latest['ts']}")
+        c1.metric("Latest ACE", f"{latest_val:.0f} MW",
+                  help=f"as of {latest_ts} EPT")
+        c1.metric("Window mean |ACE|", f"{live[ace_col].abs().mean():.0f} MW")
         fig = go.Figure()
-        fig.add_scatter(x=live["ts"], y=live["ace_mw"], mode="lines",
+        fig.add_scatter(x=live.index, y=live[ace_col], mode="lines",
                         line=dict(color="#d62728", width=1.2), name="ACE")
+        if f"{ace_col.rsplit('_', 1)[0]}_min" in live.columns:
+            fig.add_scatter(x=live.index, y=live["ace_mw_min"], mode="lines",
+                            line=dict(width=0), showlegend=False)
+            fig.add_scatter(x=live.index, y=live["ace_mw_max"], mode="lines",
+                            line=dict(width=0), fill="tonexty",
+                            fillcolor="rgba(214,39,40,.15)", name="min–max")
         fig.add_hline(y=0, line_dash="dot", line_color="#666")
         fig.update_layout(height=380, margin=dict(t=20, b=20))
         c2.plotly_chart(fig, use_container_width=True)
