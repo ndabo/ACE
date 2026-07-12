@@ -279,31 +279,46 @@ with tab_live:
                "publicly broadcast live — ACE is the imbalance you CAN watch. "
                "Negative = system short (discharge territory); positive = long. "
                "PJM keeps 30 days; older ACE is gone. All times are Eastern (EPT).")
-    window = st.select_slider(
+    col_a, col_b = st.columns([3, 1])
+    window = col_a.select_slider(
         "Window", options=["1 h", "3 h", "6 h", "24 h", "3 d", "7 d", "14 d", "30 d"],
         value="1 h")
     n, unit = window.split()
     delta = pd.Timedelta(hours=int(n)) if unit == "h" else pd.Timedelta(days=int(n))
+    # auto-refresh only makes sense for short "watching the grid" windows
+    can_auto = delta <= pd.Timedelta(hours=6)
+    auto = col_b.toggle("Live (30 s)", value=can_auto, disabled=not can_auto,
+                        help="Re-fetches from PJM every 30 s. Available for "
+                             "windows up to 6 h; PJM posts new ACE every ~15 s.")
 
-    if st.button("🔄 Refresh"):
-        fetch_ace_window.clear()
-    now = now_ept()
-    try:
-        live = fetch_ace_window((now - delta).strftime("%Y-%m-%d %H:%M"),
-                                now.strftime("%Y-%m-%d %H:%M"))
-    except Exception as exc:  # pragma: no cover - network path
-        live = pd.DataFrame()
-        st.error(f"ACE fetch failed: {exc}")
+    def _render_ace():
+        now = now_ept()
+        start_s = (now - delta).strftime("%Y-%m-%d %H:%M")
+        end_s = now.strftime("%Y-%m-%d %H:%M")
+        try:
+            if auto:  # bypass the 2-min cache: small window, cheap fetch
+                from freqreg.pjm_api import fetch_ace
+                df = fetch_ace(start_s, end_s)
+                live = df.set_index("ts") if not df.empty else df
+            else:
+                live = fetch_ace_window(start_s, end_s)
+        except Exception as exc:  # pragma: no cover - network path
+            live = pd.DataFrame()
+            st.error(f"ACE fetch failed: {exc}")
 
-    if live.empty:
-        st.warning("No ACE rows returned for this window.")
-    else:
+        if live.empty:
+            st.warning("No ACE rows returned for this window.")
+            return
         ace_col = "ace_mw_mean" if "ace_mw_mean" in live.columns else "ace_mw"
         latest_ts, latest_val = live.index[-1], live[ace_col].iloc[-1]
         c1, c2 = st.columns([1, 3])
         c1.metric("Latest ACE", f"{latest_val:.0f} MW",
+                  delta=("system long" if latest_val > 0 else "system short"),
+                  delta_color=("normal" if latest_val > 0 else "inverse"),
                   help=f"as of {latest_ts} EPT")
         c1.metric("Window mean |ACE|", f"{live[ace_col].abs().mean():.0f} MW")
+        c1.caption(f"fetched {now_ept():%H:%M:%S} EPT"
+                   + (" · auto-refreshing" if auto else ""))
         fig = go.Figure()
         fig.add_scatter(x=live.index, y=live[ace_col], mode="lines",
                         line=dict(color="#d62728", width=1.2), name="ACE")
@@ -316,3 +331,10 @@ with tab_live:
         fig.add_hline(y=0, line_dash="dot", line_color="#666")
         fig.update_layout(height=380, margin=dict(t=20, b=20))
         c2.plotly_chart(fig, use_container_width=True)
+
+    if auto:
+        st.fragment(run_every="30s")(_render_ace)()
+    else:
+        if st.button("🔄 Refresh"):
+            fetch_ace_window.clear()
+        _render_ace()
