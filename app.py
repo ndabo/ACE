@@ -31,19 +31,34 @@ FLAG_LABELS = {
 }
 
 
-# --- access gate (private instance; not meant for public cloud) --------------
+# --- access gate (internal tool; passcode required when deployed) -------------
+
+def _configured_passcode() -> str:
+    """Passcode from Streamlit secrets (cloud) or env var (local); '' if unset."""
+    try:
+        if "FREQREG_PASSCODE" in st.secrets:
+            return str(st.secrets["FREQREG_PASSCODE"])
+    except Exception:
+        pass  # no secrets.toml present -> fall through to env var
+    return os.environ.get("FREQREG_PASSCODE", "")
+
 
 def _gate() -> bool:
-    passcode = os.environ.get("FREQREG_PASSCODE", "")
+    passcode = _configured_passcode()
     if not passcode:
-        return True  # no passcode configured -> local use
+        return True  # no passcode configured -> unguarded (local dev only)
     if st.session_state.get("authed"):
         return True
+    st.title("PJM Frequency Regulation")
     with st.form("gate"):
         given = st.text_input("Passcode", type="password")
-        if st.form_submit_button("Enter") and given == passcode:
+        submitted = st.form_submit_button("Enter")
+    if submitted:
+        if given == passcode:
             st.session_state["authed"] = True
             st.rerun()
+        else:
+            st.error("Incorrect passcode.")
     return False
 
 

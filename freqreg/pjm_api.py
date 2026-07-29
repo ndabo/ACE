@@ -35,6 +35,14 @@ def now_ept() -> pd.Timestamp:
 def _api_key() -> str:
     key = os.environ.get("PJM_API_KEY", "").strip()
     if not key:
+        # Streamlit Cloud: key lives in st.secrets, not the environment.
+        try:
+            import streamlit as st  # lazy: keeps scripts usable without streamlit
+            if "PJM_API_KEY" in st.secrets:
+                key = str(st.secrets["PJM_API_KEY"]).strip()
+        except Exception:
+            pass
+    if not key:
         # fall back to .env next to the project root
         env = Path(__file__).resolve().parent.parent / ".env"
         if env.exists():
@@ -42,7 +50,9 @@ def _api_key() -> str:
                 if line.split("=")[0].strip() == "PJM_API_KEY":
                     key = line.split("=", 1)[1].strip()
     if not key:
-        raise EnvironmentError("PJM_API_KEY not set (env var or .env file)")
+        raise EnvironmentError(
+            "PJM_API_KEY not set (env var, Streamlit secrets, or .env file)"
+        )
     return key
 
 

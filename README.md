@@ -20,6 +20,22 @@ FREQREG_PASSCODE=yourcode .venv/bin/streamlit run app.py
 
 Requires `PJM_API_KEY` in `.env` (same account as PJM-5CP).
 
+## Deploy (Streamlit Community Cloud)
+
+This is an internal tool — always set a passcode when deploying.
+
+1. Point the app at `app.py` on the branch you want to serve.
+2. In **App → Settings → Secrets**, paste (see `.streamlit/secrets.toml.example`):
+   ```toml
+   FREQREG_PASSCODE = "a-strong-passcode"
+   PJM_API_KEY      = "your-pjm-api-key"
+   ```
+   The access gate reads `FREQREG_PASSCODE` from `st.secrets` first, then the
+   environment. **If it is unset the app is unguarded** — never deploy without it.
+3. The live-ACE tab works out of the box (fetches from DataMiner2). The cloud
+   filesystem is ephemeral, so `data/` signal files are not present there; the
+   Historical/Deviations tabs need a data source decision (see CLAUDE.md).
+
 ACE is fetched on demand from DataMiner2 (PJM's rolling 30-day window) — no
 local archive by design. `scripts/archive_ace.py` remains available if that
 decision is ever reversed (required before attempting Option B).
