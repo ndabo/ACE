@@ -105,8 +105,28 @@ querying "now" local can ask PJM for the future and silently return nothing).
 - Verified headless via streamlit AppTest: no exceptions, regime-break warning fires
 
 ### Step 4 — Deployment
-- [x] Passcode gate via `FREQREG_PASSCODE` env var; runs locally (`streamlit run app.py`)
+- [x] Passcode gate: reads `FREQREG_PASSCODE` from `st.secrets` first, then env var
+      (`_configured_passcode()` in app.py). Unset = unguarded → must set on cloud.
+- [x] `PJM_API_KEY` also resolves from `st.secrets` for the live-ACE tab on cloud.
+- [x] `.streamlit/secrets.toml.example` template; deploy section in README.
 - [ ] Set up daily cron for `scripts/archive_ace.py` (line in README) — user action
+
+#### Deployment target & repo layout (2026-07-29)
+- GitHub: `git@github.com:ndabo/ACE.git`. Branches: `development` (working, keeps
+  this CLAUDE.md), `release/v1` (deploy branch = full app **minus CLAUDE.md**),
+  `main` (empty baseline, receives `release/v1` via PR).
+- Target: Streamlit Community Cloud. Two public post-redesign sample days
+  (`data/raw/signal/2025-10-03.parquet`, `2025-11-03.parquet`) are force-tracked
+  in git so the Historical/Deviations tabs work on the ephemeral cloud FS; the
+  rest of `data/` stays ignored.
+
+#### Signal-source decision RE-VERIFIED (2026-07-29)
+Re-checked pjm.com ancillary-services page + DataMiner2 feed list: still **no
+public ongoing regulation signal** — only the single "Sample Normalized New
+Regulation Signal" file (one day) and no DataMiner2 signal feed. Real current
+signal lives only in Markets Gateway (member portal, own-resource, behind login).
+→ **Decision reaffirmed: keep real signal only.** Sim/deviation run on the real
+posted signal (2 sample days + pre-redesign archive). Option B stays deferred.
 
 ## Explicitly deferred to v2 (cut from v1 to stay streamlined)
 - Revenue estimation (RMCCP/RMPCP, mileage ratios, lost opportunity cost) — easy to get subtly wrong, doesn't serve the core imbalance↔battery question
